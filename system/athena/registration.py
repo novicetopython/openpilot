@@ -1,96 +1,114 @@
 #!/usr/bin/env python3
 import time
 import json
-import requests
+import jwt
+from pathlib import Path
+
+from datetime import datetime, timedelta, UTC
+from openpilot.common.api import api_get
 from openpilot.common.params import Params
 from openpilot.common.spinner import Spinner
-from openpilot.system.hardware import HARDWARE
+from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
+from openpilot.system.hardware import HARDWARE, PC
+from openpilot.system.hardware.hw import Paths
 from openpilot.common.swaglog import cloudlog
+import os
 
-# 未注册设备时的默认 ID
+
 UNREGISTERED_DONGLE_ID = "UnregisteredDevice"
-# 注册服务器地址
-REGISTER_URL = "https://mr-one.cn/v2/register.php"
-
 
 def is_registered_device() -> bool:
-    """
-    判断当前设备是否已经注册
-    如果 Params 中保存的 DongleId 为空或者等于默认未注册 ID，
-    则说明设备未注册
-    """
-    dongle = Params().get("DongleId")
-    return dongle not in (None, UNREGISTERED_DONGLE_ID)
+  dongle = Params().get("DongleId")
+  return dongle not in (None, UNREGISTERED_DONGLE_ID)
 
 
-def register(show_spinner=True) -> str:
-    """
-    设备注册流程：
-    1. 如果已有 dongle_id，直接返回，不再重复注册
-    2. 如果没有，循环向服务器注册，直到成功
-    """
-    params = Params()
+def register(show_spinner=False) -> str | None:
+  """
+  All devices built since March 2024 come with all
+  info stored in /persist/. This is kept around
+  only for devices built before then.
 
-    # ✅ 已注册过，直接返回
-    if is_registered_device():
-        dongle_id = params.get("DongleId")
-        cloudlog.info(f"Device already registered, dongle_id={dongle_id}")
-        if show_spinner:
-            spinner = Spinner()
-            spinner.update(f"Device already registered, dongle_id={dongle_id}")
-            time.sleep(2)
-            spinner.close()
-        return dongle_id
+  With a backend update to take serial number instead
+  of dongle ID to some endpoints, this can be removed
+  entirely.
+  """
+  params = Params()
+  return UNREGISTERED_DONGLE_ID
+  dongle_id: str | None = params.get("DongleId")
+  if dongle_id is None and Path(Paths.persist_root()+"/comma/dongle_id").is_file():
+    # not all devices will have this; added early in comma 3X production (2/28/24)
+    with open(Paths.persist_root()+"/comma/dongle_id") as f:
+      dongle_id = f.read().strip()
 
-    # ❌ 未注册，进入注册流程
-    spinner = Spinner() if show_spinner else None
+  pubkey = Path(Paths.persist_root()+"/comma/id_rsa.pub")
+  if not pubkey.is_file():
+    dongle_id = UNREGISTERED_DONGLE_ID
+    cloudlog.warning(f"missing public key: {pubkey}")
+  elif dongle_id is None:
+    if show_spinner:
+      spinner = Spinner()
+      spinner.update("registering device")
 
-    while True:  # 无限循环，直到注册成功
-        serial = HARDWARE.get_serial()
-        if spinner:
-            spinner.update(f"Registering device... serial={serial}")
+    if os.getenv("LITE"):
+      params.put("DongleId", UNREGISTERED_DONGLE_ID)
+      return dongle_id
+    # Create registration token, in the future, this key will make JWTs directly
+    with open(Paths.persist_root()+"/comma/id_rsa.pub") as f1, open(Paths.persist_root()+"/comma/id_rsa") as f2:
+      public_key = f1.read()
+      private_key = f2.read()
 
-        try:
-            # 向服务器发起 POST 请求
-            resp = requests.post(
-                REGISTER_URL,
-                json={"serial": serial},
-                timeout=5,
-                verify=False  # 禁用 SSL 证书验证（自签证书时使用）
-            )
+    # Block until we get the imei
+    serial = HARDWARE.get_serial()
+    start_time = time.monotonic()
+    imei1: str | None = None
+    imei2: str | None = None
+    count = 0
+    while imei1 is None and imei2 is None:
+      try:
+        imei1, imei2 = HARDWARE.get_imei(0), HARDWARE.get_imei(1)
+      except Exception:
+        cloudlog.exception("Error getting imei, trying again...")
+        count += 1
+        if count > 10:
+          params.put("DongleId", UNREGISTERED_DONGLE_ID)
+          return dongle_id
+        time.sleep(1)
 
-            # 解析返回结果
-            try:
-                dongleauth = resp.json()
-            except json.JSONDecodeError:
-                dongleauth = {}
-                #cloudlog.warning("Registration server returned invalid JSON")
+      if time.monotonic() - start_time > 60 and show_spinner:
+        spinner.update(f"registering device - serial: {serial}, IMEI: ({imei1}, {imei2})")
 
-            if dongleauth.get("status") == "ok" and dongleauth.get("dongle_id"):
-                # 注册成功
-                dongle_id = dongleauth["dongle_id"]
-                params.put("DongleId", dongle_id)
-                #cloudlog.info(f"Registration successful, dongle_id={dongle_id}")
-                if spinner:
-                    spinner.close()
-                return dongle_id
-            else:
-                # 注册失败，打印错误
-                #msg = dongleauth.get("message", "Unknown error")
-                #cloudlog.warning(f"Registration failed: {msg}")
-                if spinner:
-                    spinner.update(f"Registering device... serial={serial}")
+    backoff = 0
+    start_time = time.monotonic()
+    while True:
+      try:
+        register_token = jwt.encode({'register': True, 'exp': datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=1)}, private_key, algorithm='RS256')
+        cloudlog.info("getting pilotauth")
+        resp = api_get("v2/pilotauth/", method='POST', timeout=5,
+                       imei=imei1, imei2=imei2, serial=serial, public_key=public_key, register_token=register_token)
 
-        except requests.exceptions.RequestException as e:
-            # 网络请求异常
-            #cloudlog.exception("Registration request failed")
-            if spinner:
-                spinner.update(f"Network error: {e}, retrying...")
+        if resp.status_code in (402, 403):
+          cloudlog.info(f"Unable to register device, got {resp.status_code}")
+          dongle_id = UNREGISTERED_DONGLE_ID
+        else:
+          dongleauth = json.loads(resp.text)
+          dongle_id = dongleauth["dongle_id"]
+        break
+      except Exception:
+        cloudlog.exception("failed to authenticate")
+        backoff = min(backoff + 1, 15)
+        time.sleep(backoff)
 
-        # 等待 5 秒后重试
-        time.sleep(5)
+      if time.monotonic() - start_time > 60 and show_spinner:
+        spinner.update(f"registering device - serial: {serial}, IMEI: ({imei1}, {imei2})")
+
+    if show_spinner:
+      spinner.close()
+
+  if dongle_id:
+    params.put("DongleId", dongle_id)
+    set_offroad_alert("Offroad_UnregisteredHardware", (dongle_id == UNREGISTERED_DONGLE_ID) and not PC)
+  return dongle_id
 
 
 if __name__ == "__main__":
-    dongle_id = register(show_spinner=True)
-    print(f"Registration complete, dongle_id={dongle_id}")
+  print(register())
