@@ -70,7 +70,7 @@ def and_(*fns):
 procs = [
   DaemonProcess("manage_athenad", "system.athena.manage_athenad", "AthenadPid"),
 
-  NativeProcess("loggerd", "system/loggerd", ["./loggerd"], logging),
+  #NativeProcess("loggerd", "system/loggerd", ["./loggerd"], logging),
   NativeProcess("encoderd", "system/loggerd", ["./encoderd"], only_onroad),
   NativeProcess("stream_encoderd", "system/loggerd", ["./encoderd", "--stream"], or_(notcar, and_(dashy_with_video, only_onroad))),
   PythonProcess("logmessaged", "system.logmessaged", always_run),
@@ -89,7 +89,7 @@ procs = [
   NativeProcess("ui", "selfdrive/ui", ["./ui"], always_run, watchdog_max_dt=(5 if not PC else None)),
   PythonProcess("raylib_ui", "selfdrive.ui.ui", always_run, enabled=False, watchdog_max_dt=(5 if not PC else None)),
   PythonProcess("soundd", "selfdrive.ui.soundd", only_onroad, enabled=not os.getenv("LITE")),
-  PythonProcess("beep", "selfdrive.selfdrived.beep", always_run),
+  PythonProcess("beepd", "dragonpilot.selfdrive.ui.beepd", only_onroad, enabled=(Params().get_bool("dp_device_beep") and os.getenv("LITE"))),
   PythonProcess("locationd", "selfdrive.locationd.locationd", only_onroad),
   NativeProcess("_pandad", "selfdrive/pandad", ["./pandad"], always_run, enabled=False),
   PythonProcess("calibrationd", "selfdrive.locationd.calibrationd", only_onroad),
