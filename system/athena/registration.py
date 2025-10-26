@@ -49,9 +49,9 @@ def register(show_spinner=False) -> str | None:
       spinner = Spinner()
       spinner.update("registering device")
 
-    if os.getenv("LITE"):
-      params.put("DongleId", UNREGISTERED_DONGLE_ID)
-      return dongle_id
+    #if os.getenv("LITE"):
+      #params.put("DongleId", UNREGISTERED_DONGLE_ID)
+      #return dongle_id
     # Create registration token, in the future, this key will make JWTs directly
     with open(Paths.persist_root()+"/comma/id_rsa.pub") as f1, open(Paths.persist_root()+"/comma/id_rsa") as f2:
       public_key = f1.read()
