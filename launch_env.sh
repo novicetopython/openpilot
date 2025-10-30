@@ -5,7 +5,7 @@ export MKL_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export VECLIB_MAXIMUM_THREADS=1
-export ATHENA_HOST='ws://athena.mr-one.cn'
+export ATHENA_HOST='ws://athena.mr-one.cn:80'
 export API_HOST='http://res.mr-one.cn'
 if [ -s /data/params/d/dp_device_model_selected ]; then
   export FINGERPRINT="$(cat /data/params/d/dp_device_model_selected)"
