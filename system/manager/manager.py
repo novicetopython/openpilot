@@ -58,7 +58,7 @@ def manager_init() -> None:
   serial = HARDWARE.get_serial()
   params.put("Version", build_metadata.openpilot.version)
   params.put("TermsVersion", terms_version)
-  params.put("TrainingVersion", training_version)
+  params.put("TrainingVersion", "0.2.0")
   params.put("GitCommit", build_metadata.openpilot.git_commit)
   params.put("GitCommitDate", build_metadata.openpilot.git_commit_date)
   params.put("GitBranch", build_metadata.channel)
